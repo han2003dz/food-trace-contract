@@ -1,0 +1,39 @@
+{
+  "_format": "hh3-sol-build-info-1",
+  "id": "solc-0_8_28-215ff9eae38645c2f6af0c1e8f0716e6b8dc79c2",
+  "solcVersion": "0.8.28",
+  "solcLongVersion": "0.8.28+commit.7893614a",
+  "userSourceNameMap": {
+    "contracts/ProductTracking.sol": "project/contracts/ProductTracking.sol"
+  },
+  "input": {
+    "language": "Solidity",
+    "settings": {
+      "evmVersion": "cancun",
+      "optimizer": {
+        "enabled": true,
+        "runs": 200
+      },
+      "outputSelection": {
+        "*": {
+          "": [
+            "ast"
+          ],
+          "*": [
+            "abi",
+            "evm.bytecode",
+            "evm.deployedBytecode",
+            "evm.methodIdentifiers",
+            "metadata"
+          ]
+        }
+      },
+      "remappings": []
+    },
+    "sources": {
+      "project/contracts/ProductTracking.sol": {
+        "content": "// SPDX-License-Identifier: MIT\r\n\r\npragma solidity ^0.8.20;\r\n\r\ncontract ProductTracking {\r\n  struct Product {\r\n    uint256 id;\r\n    string name;\r\n    string origin;\r\n    string manufactureDate;\r\n    string expiryDate;\r\n    string currentOwner;\r\n    string[] history;\r\n  }\r\n\r\n  mapping(uint256 => Product) private products;\r\n\r\n  uint256 public productCount;\r\n\r\n  event ProductCreated(uint256 indexed id, string name, string origin);\r\n  event ProductUpdated(uint256 indexed id, string info, string newOwner);\r\n\r\n  function createProduct(\r\n    string memory _name,\r\n    string memory _origin,\r\n    string memory _manufactureDate,\r\n    string memory _expiryDate\r\n  ) public {\r\n\r\n    require(bytes(_name).length > 0, \"Product name required\");\r\n    require(bytes(_origin).length > 0, \"Origin required\");\r\n\r\n    productCount++;\r\n    uint256 newId = productCount;\r\n\r\n    Product storage p = products[newId];\r\n    p.id = newId;\r\n    p.name = _name;\r\n    p.origin = _origin;\r\n    p.manufactureDate = _manufactureDate;\r\n    p.expiryDate = _expiryDate;\r\n    p.currentOwner = \"Producer\";\r\n    p.history.push(\"Created by Producer\");\r\n\r\n    emit ProductCreated(newId, _name, _origin);\r\n  }\r\n\r\n  function updateProduct(\r\n    uint256 _id,\r\n    string memory _info,\r\n    string memory _newOwner\r\n  ) public {\r\n    require(_id > 0 && _id <= productCount, \"Invalid product ID\");\r\n    require(bytes(_info).length > 0, \"Info required\");\r\n    require(bytes(_newOwner).length > 0, \"New owner required\");\r\n\r\n    Product storage p = products[_id];\r\n    p.currentOwner = _newOwner;\r\n    p.history.push(_info);\r\n    emit ProductUpdated(_id, _info, _newOwner);\r\n  }\r\n\r\n  function getProduct(uint256 id) public view returns (\r\n      uint256,\r\n      string memory,\r\n      string memory,\r\n      string memory,\r\n      string memory,\r\n      string memory,\r\n      string[] memory\r\n    )\r\n  {\r\n    require(id > 0 && id <= productCount, \"Invalid product ID\");\r\n\r\n    Product memory p = products[id];\r\n    return (\r\n      p.id,\r\n      p.name,\r\n      p.origin,\r\n      p.manufactureDate,\r\n      p.expiryDate,\r\n      p.currentOwner,\r\n      p.history\r\n    );\r\n  }\r\n}"
+      }
+    }
+  }
+}
