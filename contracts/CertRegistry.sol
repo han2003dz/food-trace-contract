@@ -45,7 +45,7 @@ contract CertRegistry {
             issuerOrgId: issuerOrgId,
             metadataCid: metadataCid,
             expireAt: expireAt,
-            active: true
+            active: true   
         });
         emit CertIssued(id, subject, issuerOrgId, metadataCid, expireAt);
     }

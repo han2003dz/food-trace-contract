@@ -5,7 +5,7 @@ library Types {
     enum OrgType {
         NONE,
         FARM,
-        PRCESSOR,
+        PROCESSOR,
         LOGISTICS,
         RETAILER,
         AUDITOR,
