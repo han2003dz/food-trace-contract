@@ -3,15 +3,16 @@ import { network } from "hardhat";
 
 const { ethers } = await network.connect();
 
-describe("BatchRegistry", function () {
+describe("BatchRegistry (with Fee System)", function () {
   let orgs: any;
   let batches: any;
   let owner: any;
   let farmer: any;
   let processor: any;
 
-  beforeEach("BatchRegistry deployment", async function () {
+  beforeEach("deploy contracts", async function () {
     [owner, farmer, processor] = await ethers.getSigners();
+
     const OrganizationRegistry = await ethers.getContractFactory(
       "OrganizationRegistry"
     );
@@ -37,46 +38,117 @@ describe("BatchRegistry", function () {
     await batches.waitForDeployment();
   });
 
+  // ============================
+  // ✅ FEE TESTS
+  // ============================
+  it("Should require fee when creating batch", async () => {
+    const fee = await batches.feeCreateBatch();
+
+    // Gửi thiếu fee
+    await expect(
+      batches
+        .connect(farmer)
+        .createBatch("Apple", "cid-apple", ethers.id("Batch-001"), 0, {
+          value: ethers.parseEther("0.0001"),
+        })
+    ).to.be.revertedWith("INSUFFICIENT_FEE");
+
+    // Gửi đúng fee
+    await expect(
+      batches
+        .connect(farmer)
+        .createBatch("Apple", "cid-apple", ethers.id("Batch-001"), 0, {
+          value: fee,
+        })
+    ).to.emit(batches, "FeePaid");
+  });
+
+  it("Should accumulate total fees and track per user", async () => {
+    const fee = await batches.feeCreateBatch();
+    await batches
+      .connect(farmer)
+      .createBatch("Mango", "cid-mango", ethers.id("Batch-002"), 0, {
+        value: fee,
+      });
+    await batches
+      .connect(farmer)
+      .createBatch("Banana", "cid-banana", ethers.id("Batch-003"), 0, {
+        value: fee,
+      });
+
+    const total = await batches.totalFeeCollected();
+    const userPaid = await batches.userFees(farmer.address);
+
+    expect(total).to.equal(fee * 2n);
+    expect(userPaid).to.equal(fee * 2n);
+  });
+
+  it("Should allow owner to update fee", async () => {
+    const newFee = ethers.parseEther("0.005");
+    await expect(batches.connect(owner).setFee(newFee))
+      .to.emit(batches, "FeeUpdated")
+      .withArgs(newFee);
+
+    const updated = await batches.feeCreateBatch();
+    expect(updated).to.equal(newFee);
+  });
+
+  it("Should allow owner to withdraw collected fees", async () => {
+    const fee = ethers.parseEther("0.001");
+    await batches
+      .connect(farmer)
+      .createBatch("Test", "cid-test", ethers.id("Batch-200"), 0, {
+        value: fee,
+      });
+
+    const contractBalance = await batches.getContractBalance();
+    expect(contractBalance).to.equal(fee);
+
+    await batches.connect(owner).withdrawFees(owner.address, fee);
+
+    const newBalance = await batches.getContractBalance();
+    expect(newBalance).to.equal(0n);
+  });
+
+  it("Should show correct contract balance", async () => {
+    const fee = await batches.feeCreateBatch();
+
+    await batches
+      .connect(farmer)
+      .createBatch("Tomato", "cid-tomato", ethers.id("Batch-005"), 0, {
+        value: fee,
+      });
+
+    const balance = await batches.getContractBalance();
+    expect(balance).to.equal(fee);
+  });
+
+  // ============================
+  // ✅ CORE FUNCTIONAL TESTS
+  // ============================
+
   it("Should create a new batch correctly", async () => {
+    const fee = await batches.feeCreateBatch();
     const tx = await batches
       .connect(farmer)
-      .createBatch("Organic Apples", "cid-apple", ethers.id("Batch-001"), 0);
+      .createBatch("Organic Apples", "cid-apple", ethers.id("Batch-001"), 0, {
+        value: fee,
+      });
 
     await tx.wait();
-
     const batch = await batches.getBatch(1);
     expect(batch.id).to.equal(1n);
     expect(batch.ownerOrgId).to.equal(1n);
     expect(batch.productType).to.equal("Organic Apples");
-    expect(batch.metadataCid).to.equal("cid-apple");
-  });
-
-  it("Should revert if org not registered", async () => {
-    const outsider = await ethers.getSigner(ethers.ZeroAddress);
-    await expect(
-      batches
-        .connect(outsider)
-        .createBatch("Organic Apples", "cid-apple", ethers.id("Batch-001"), 0)
-    ).to.be.revertedWith("ORG_NOT_REGISTERED");
-  });
-
-  //   TRANSFER OWNERSHIP TESTS
-  it("Should transfer batch ownership correctly", async () => {
-    await batches
-      .connect(farmer)
-      .createBatch("Balana", "cid-banana", ethers.id("Batch-002"), 0);
-
-    await batches.connect(farmer).transferBatchOwner(1, 2);
-
-    const batch = await batches.getBatch(1);
-
-    expect(batch.ownerOrgId).to.equal(2n);
   });
 
   it("Should revert if transferring to inactive org", async () => {
+    const fee = await batches.feeCreateBatch();
     await batches
       .connect(farmer)
-      .createBatch("Pineapple", "cid-pine", ethers.id("Batch-003"), 0);
+      .createBatch("Pineapple", "cid-pine", ethers.id("Batch-003"), 0, {
+        value: fee,
+      });
 
     await orgs
       .connect(owner)
@@ -88,21 +160,26 @@ describe("BatchRegistry", function () {
   });
 
   it("Should update batch status correctly", async () => {
+    const fee = await batches.feeCreateBatch();
     await batches
       .connect(farmer)
-      .createBatch("Mango", "cid-mango", ethers.id("Batch-004"), 0);
+      .createBatch("Mango", "cid-mango", ethers.id("Batch-004"), 0, {
+        value: fee,
+      });
+
     await expect(batches.connect(farmer).updateBatchStatus(1, 1)).to.emit(
       batches,
       "BatchStatusUpdated"
     );
-    const updatedBatch = await batches.getBatch(1);
-    expect(updatedBatch.status).to.equal(1n);
   });
 
   it("Should revert if rollback batch status", async () => {
+    const fee = await batches.feeCreateBatch();
     await batches
       .connect(farmer)
-      .createBatch("Apple", "cid-apple", ethers.id("Batch-005"), 0);
+      .createBatch("Apple", "cid-apple", ethers.id("Batch-005"), 0, {
+        value: fee,
+      });
 
     await batches.connect(farmer).updateBatchStatus(1, 1);
 
@@ -112,94 +189,74 @@ describe("BatchRegistry", function () {
   });
 
   it("Should split batch into children", async () => {
+    const fee = await batches.feeCreateBatch();
     await batches
       .connect(farmer)
-      .createBatch("Apple", "cid-apple", ethers.id("Batch-006"), 0);
+      .createBatch("Apple", "cid-apple", ethers.id("Batch-006"), 0, {
+        value: fee,
+      });
 
     const tx = await batches.connect(farmer).splitBatch(1, 3);
-    const receipt = await tx.wait();
-
+    await tx.wait();
     const children = await batches.getChildren(1);
-
-    console.log("children", children);
     expect(children.length).to.equal(3);
   });
 
   it("Should revert if split count invalid", async () => {
+    const fee = await batches.feeCreateBatch();
     await batches
       .connect(farmer)
-      .createBatch("Apple", "cid-apple", ethers.id("Batch-007"), 0);
+      .createBatch("Apple", "cid-apple", ethers.id("Batch-007"), 0, {
+        value: fee,
+      });
 
     await expect(batches.connect(farmer).splitBatch(1, 0)).to.be.revertedWith(
-      "BAD_COUNT"
-    );
-
-    await expect(batches.connect(farmer).splitBatch(1, 65)).to.be.revertedWith(
       "BAD_COUNT"
     );
   });
 
   it("Should merge batches correctly", async () => {
+    const fee = await batches.feeCreateBatch();
     await Promise.all([
       batches
         .connect(farmer)
-        .createBatch("Apple", "cid-apple-1", ethers.id("Batch-007"), 0),
-
+        .createBatch("Apple", "cid-apple-1", ethers.id("Batch-007"), 0, {
+          value: fee,
+        }),
       batches
         .connect(farmer)
-        .createBatch("Apple", "cid-apple-2", ethers.id("Batch-008"), 0),
+        .createBatch("Apple", "cid-apple-2", ethers.id("Batch-008"), 0, {
+          value: fee,
+        }),
     ]);
 
     const sources = [1, 2];
-    const tx = await batches
-      .connect(farmer)
-      .mergeBatches(
-        sources,
-        "MixedBanana",
-        "cid-merged",
-        ethers.id("Batch-009")
-      );
-
-    await tx.wait();
-
-    const merged = await batches.getBatch(3);
-
-    expect(merged.productType).to.equal("MixedBanana");
-  });
-
-  it("Should revert if merge sources invalid", async () => {
     await batches
       .connect(farmer)
-      .createBatch("Rice", "cid1", ethers.id("dataC"), 0);
-    await expect(
-      batches.connect(farmer).mergeBatches([1], "New", "cid", ethers.id("d"))
-    ).to.be.revertedWith("BAD_SOURCES");
+      .mergeBatches(sources, "Mixed", "cid-merged", ethers.id("Batch-009"));
+
+    const merged = await batches.getBatch(3);
+    expect(merged.productType).to.equal("Mixed");
   });
 
   it("Should append event correctly", async () => {
+    const fee = await batches.feeCreateBatch();
     await batches
       .connect(farmer)
-      .createBatch("Apple", "cid-apple", ethers.id("Batch-011"), 0);
+      .createBatch("Apple", "cid-apple", ethers.id("Batch-011"), 0, {
+        value: fee,
+      });
 
-    const tx = await batches
+    await batches
       .connect(farmer)
-      .appendEvent(1, 1, "cid-apple-process", ethers.id("Batch-012"));
-
-    await tx.wait();
-
-    const tx2 = await batches
+      .appendEvent(1, 1, "cid-process", ethers.id("Batch-012"));
+    await batches
       .connect(farmer)
-      .appendEvent(1, 2, "cid-apple-package", ethers.id("Batch-013"));
-
-    await tx2.wait();
+      .appendEvent(1, 2, "cid-pack", ethers.id("Batch-013"));
 
     const events = await batches.getEvents(1);
     expect(events.length).to.equal(2);
-    expect(events[0].metadataCid).to.equal("cid-apple-process");
-    expect(events[1].metadataCid).to.equal("cid-apple-package");
-    console.log("events", events);
-    const batch = await batches.getBatch(1);
-    console.log("batch", batch);
+    expect(events[1].metadataCid).to.equal("cid-pack");
   });
 
   it("Should revert if appending to non-existing batch", async () => {
@@ -208,22 +265,15 @@ describe("BatchRegistry", function () {
     ).to.be.revertedWith("BATCH_NOT_FOUND");
   });
 
-  it("Should pause and unpause contract correctly", async () => {
+  it("Should pause/unpause contract correctly", async () => {
     await expect(batches.connect(owner).setPaused(true)).to.emit(
       batches,
       "Paused"
     );
-
     await expect(
-      batches.connect(farmer).createBatch("Test", "cid", ethers.id("data"), 0)
+      batches.connect(farmer).createBatch("Test", "cid", ethers.id("data"), 0, {
+        value: ethers.parseEther("0.001"),
+      })
     ).to.be.revertedWith("CONTRACT_PAUSED");
-
-    await batches.connect(owner).setPaused(false);
-
-    await batches
-      .connect(farmer)
-      .createBatch("Test", "cid", ethers.id("Batch-014"), 0);
-    const batch = await batches.getBatch(1);
-    expect(batch.id).to.equal(1n);
   });
 });

@@ -33,7 +33,7 @@ contract AddressBook is RoleManager {
         require(_telemetry != address(0), "ZERO_ADDR");
 
         orgs = OrganizationRegistry(_orgs);
-        batches = BatchRegistry(_batches);
+        batches = BatchRegistry(payable(_batches));
         certs = CertRegistry(_certs);
         telemetry = TelemetryAnchor(_telemetry);
 

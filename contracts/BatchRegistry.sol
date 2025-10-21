@@ -1,17 +1,32 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
+
 import {OrganizationRegistry} from "./OrganizationRegistry.sol";
+import {RoleManager} from "./RoleManager.sol";
 import {Types} from "../libs/Types.sol";
-contract BatchRegistry {
+
+contract BatchRegistry is RoleManager {
     OrganizationRegistry public orgs;
+
     uint256 private _batchSeq;
     uint256 private _eventSeq;
+
     mapping(uint256 => Types.Batch) private _batchById;
     mapping(uint256 => uint256[]) private _childrenOf;
     mapping(uint256 => Types.BatchEvent[]) private _eventsOf;
+
     bool public paused;
 
+    // ===== Fee System =====
+    uint256 public feeCreateBatch = 0.001 ether;
+    uint256 public totalFeeCollected;
+    mapping(address => uint256) public userFees;
+
+    // ===== Events =====
     event Paused(bool status);
+    event FeeUpdated(uint256 newFee);
+    event FeePaid(address indexed from, uint256 amount, address indexed to);
+    event FeeTransferFailed(address indexed from, uint256 amount);
     event BatchCreated(
         uint256 indexed batchId,
         uint256 parentId,
@@ -41,6 +56,7 @@ contract BatchRegistry {
 
     constructor(OrganizationRegistry _orgs) {
         orgs = _orgs;
+        owner = msg.sender;
     }
 
     modifier onlyActiveOrg() {
@@ -56,6 +72,7 @@ contract BatchRegistry {
         _;
     }
 
+    // ===== Admin Controls =====
     function setPaused(bool _p) external {
         address s = msg.sender;
         require(orgs.superAdmins(s) || s == orgs.owner(), "NO_AUTH");
@@ -63,21 +80,27 @@ contract BatchRegistry {
         emit Paused(_p);
     }
 
+    function setFee(uint256 newFee) external onlyOwner {
+        feeCreateBatch = newFee;
+        emit FeeUpdated(newFee);
+    }
+
+    // ===== Core Logic =====
     function createBatch(
         string calldata productType,
         string calldata metadataCid,
         bytes32 dataHash,
         uint256 parentId
-    ) external notPaused onlyActiveOrg returns (uint256 id) {
+    ) external payable notPaused onlyActiveOrg returns (uint256 id) {
+        require(msg.value >= feeCreateBatch, "INSUFFICIENT_FEE");
+
+        totalFeeCollected += msg.value;
+        userFees[msg.sender] += msg.value;
+
+        emit FeePaid(msg.sender, msg.value, address(this));
+
         (uint256 ownerOrgId, ) = _requireSenderOrgActive();
-        return
-            _createBatch(
-                ownerOrgId,
-                productType,
-                metadataCid,
-                dataHash,
-                parentId
-            );
+        id = _createBatch(ownerOrgId, productType, metadataCid, dataHash, parentId);
     }
 
     function _createBatch(
@@ -108,14 +131,7 @@ contract BatchRegistry {
             _childrenOf[parentId].push(id);
         }
 
-        emit BatchCreated(
-            id,
-            parentId,
-            ownerOrgId,
-            productType,
-            metadataCid,
-            dataHash
-        );
+        emit BatchCreated(id, parentId, ownerOrgId, productType, metadataCid, dataHash);
     }
 
     function transferBatchOwner(
@@ -212,15 +228,9 @@ contract BatchRegistry {
         bytes32 dataHash
     ) external notPaused onlyActiveOrg returns (uint256 eventId) {
         (uint256 actorOrgId, ) = _requireSenderOrgActive();
-        return
-            _appendEventInternal(
-                batchId,
-                eventType,
-                actorOrgId,
-                metadataCid,
-                dataHash
-            );
+        return _appendEventInternal(batchId, eventType, actorOrgId, metadataCid, dataHash);
     }
+
     function _appendEventInternal(
         uint256 batchId,
         Types.EventType eventType,
@@ -241,28 +251,34 @@ contract BatchRegistry {
             at: block.timestamp
         });
         _eventsOf[batchId].push(ev);
-        emit BatchEventAppended(
-            eventId,
-            batchId,
-            eventType,
-            actorOrgId,
-            metadataCid,
-            dataHash
-        );
+        emit BatchEventAppended(eventId, batchId, eventType, actorOrgId, metadataCid, dataHash);
     }
 
+    function withdrawFees(address payable to, uint256 amount) external onlyOwner {
+        require(amount <= address(this).balance, "INSUFFICIENT_BALANCE");
+        (bool sent, ) = to.call{value: amount}("");
+        require(sent, "WITHDRAW_FAIL");
+        emit FeePaid(address(this), amount, to);
+    }
+
+    // ===== View =====
     function getBatch(uint256 id) external view returns (Types.Batch memory) {
         return _batchById[id];
     }
+
     function getChildren(uint256 id) external view returns (uint256[] memory) {
         return _childrenOf[id];
     }
-    function getEvents(
-        uint256 batchId
-    ) external view returns (Types.BatchEvent[] memory) {
+
+    function getEvents(uint256 batchId) external view returns (Types.BatchEvent[] memory) {
         return _eventsOf[batchId];
     }
 
+    function getContractBalance() external view returns (uint256) {
+        return address(this).balance;
+    }
+
+    // ===== Internal Helpers =====
     function _requireSenderOrgActive()
         internal
         view
@@ -272,6 +288,7 @@ contract BatchRegistry {
         Types.Organization memory o = orgs.getOrganization(orgId);
         active = o.active;
     }
+
     function _requireBatchOwnedBySender(
         uint256 batchId
     ) internal view returns (Types.Batch storage b) {
@@ -280,4 +297,6 @@ contract BatchRegistry {
         require(b.id != 0, "BATCH_NOT_FOUND");
         require(b.ownerOrgId == orgId, "NOT_OWNER_ORG");
     }
+
+    receive() external payable {}
 }
