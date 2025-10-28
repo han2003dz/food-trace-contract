@@ -3,12 +3,16 @@ import OrganizationRegistryModule from "./OrganizationRegistry.js";
 import BatchRegistryModule from "./BatchRegistry.js";
 import CertRegistryModule from "./CertRegistry.js";
 import TelemetryAnchorModule from "./TelemetryAnchor.js";
+import TraceabilityMerkleRegistryModule from "./TraceabilityMerkleRegistry.js";
 
 const AddressBookModule = buildModule("AddressBookModule", (m) => {
   const { organizationRegistry } = m.useModule(OrganizationRegistryModule);
   const { batchRegistry } = m.useModule(BatchRegistryModule);
   const { certRegistry } = m.useModule(CertRegistryModule);
   const { telemetryAnchor } = m.useModule(TelemetryAnchorModule);
+  // const { traceabilityMerkleRegistry } = m.useModule(
+  //   TraceabilityMerkleRegistryModule
+  // );
 
   const addressBook = m.contract("AddressBook");
 
@@ -17,6 +21,7 @@ const AddressBookModule = buildModule("AddressBookModule", (m) => {
     batchRegistry,
     certRegistry,
     telemetryAnchor,
+    // traceabilityMerkleRegistry,
   ]);
 
   return { addressBook };

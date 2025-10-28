@@ -1,0 +1,39 @@
+{
+  "_format": "hh3-sol-build-info-1",
+  "id": "solc-0_8_28-7f6f9a71e09218a5d00ba0bd4720ed34f7352f81",
+  "solcVersion": "0.8.28",
+  "solcLongVersion": "0.8.28+commit.7893614a",
+  "userSourceNameMap": {
+    "contracts/TraceabilityMerkleRegistry.sol": "project/contracts/TraceabilityMerkleRegistry.sol"
+  },
+  "input": {
+    "language": "Solidity",
+    "settings": {
+      "evmVersion": "cancun",
+      "optimizer": {
+        "enabled": true,
+        "runs": 50
+      },
+      "outputSelection": {
+        "*": {
+          "": [
+            "ast"
+          ],
+          "*": [
+            "abi",
+            "evm.bytecode",
+            "evm.deployedBytecode",
+            "evm.methodIdentifiers",
+            "metadata"
+          ]
+        }
+      },
+      "remappings": []
+    },
+    "sources": {
+      "project/contracts/TraceabilityMerkleRegistry.sol": {
+        "content": "// SPDX-License-Identifier: MIT\r\npragma solidity  ^0.8.20;\r\n\r\ncontract TraceabilityMerkleRegistry {\r\n  error Unauthorized();\r\n  error InvalidRoot();\r\n  error InvalidRange();\r\n  error ZeroAddress();\r\n  error RootAlreadyCommitted();\r\n  error BatchNotFound();\r\n\r\n  event RootCommitted(\r\n    uint256 indexed batchId,\r\n    bytes32 indexed merkleRoot,\r\n    uint256 fromEventId,\r\n    uint256 toEventId,\r\n    uint64 timestamp,\r\n    address indexed commiter\r\n  );\r\n  event CommitterChanged(\r\n    address indexed oldCommitter, \r\n    address indexed newCommitter\r\n  );\r\n  event OwnershipTransferred(\r\n    address indexed previousOwner, \r\n    address indexed newOwner\r\n  );\r\n  event Paused(\r\n    address account\r\n  );\r\n  event Unpaused( \r\n    address account\r\n  );\r\n  event BatchCodeBound(\r\n    bytes32 indexed batchCodeHash,\r\n    uint256 indexed batchId,\r\n    string batchCode\r\n  );\r\n\r\n  address public owner;\r\n  address public committer;\r\n  bool public paused;\r\n\r\n  modifier onlyOwner() {\r\n    if (msg.sender != owner) revert Unauthorized();\r\n    _;\r\n  }\r\n  modifier onlyCommitter() {\r\n    if (msg.sender != committer) revert Unauthorized();\r\n    _;\r\n  }\r\n  modifier whenNotPaused() {\r\n    if (paused) revert Unauthorized();\r\n    _; \r\n  }\r\n\r\n  struct MerkleBatch {\r\n    bytes32 root;\r\n    uint256 fromEventId;\r\n    uint256 toEventId; \r\n    uint64 timestamp;\r\n    address committer;\r\n    bool exists;\r\n  }\r\n\r\n  uint256 public totalBatches;\r\n\r\n  mapping(uint256 => MerkleBatch) public batches;\r\n  mapping(bytes32 => bool) public rootSeen;\r\n  mapping(bytes32 => uint256[]) private _batchCodeToBatchIds;\r\n\r\n  constructor(address initialCommitter) {\r\n    owner = msg.sender;\r\n    address c = (initialCommitter == address(0) ? msg.sender : initialCommitter);\r\n    committer = c;\r\n    emit OwnershipTransferred(address(0), owner);\r\n    emit CommitterChanged(address(0), committer);\r\n  }\r\n\r\n  function transferOwnership(address newOwner) external onlyOwner {\r\n    if (newOwner == address(0)) revert ZeroAddress();\r\n    emit OwnershipTransferred(owner, newOwner);\r\n    owner = newOwner;\r\n  }\r\n\r\n  function setCommitter(address newCommitter) external onlyOwner {\r\n    if (newCommitter == address(0)) revert ZeroAddress();\r\n    emit CommitterChanged(committer, newCommitter);\r\n    committer = newCommitter; \r\n  }\r\n\r\n  function pause() external onlyOwner {\r\n    paused = true;\r\n    emit Paused(msg.sender);\r\n  }\r\n\r\n  function unpause() external onlyOwner {\r\n    paused = false;\r\n    emit Unpaused(msg.sender);\r\n  }\r\n\r\n  function commitMerkleRoot(\r\n    bytes32 merkleRoot, \r\n    uint256 fromEventId, \r\n    uint256 toEventId\r\n  ) public whenNotPaused onlyCommitter returns (uint256 batchId) {\r\n    if (merkleRoot == bytes32(0)) revert InvalidRoot();\r\n    if (fromEventId > toEventId) revert InvalidRange();\r\n    if (rootSeen[merkleRoot]) revert RootAlreadyCommitted();\r\n\r\n    batchId = ++totalBatches;\r\n\r\n    batches[batchId] = MerkleBatch({\r\n      root: merkleRoot,\r\n      fromEventId: fromEventId,\r\n      toEventId: toEventId,\r\n      timestamp: uint64(block.timestamp),\r\n      committer: msg.sender,\r\n      exists: true\r\n    });\r\n\r\n    rootSeen[merkleRoot] = true;\r\n\r\n    emit RootCommitted(\r\n      batchId,\r\n      merkleRoot,\r\n      fromEventId,\r\n      toEventId,\r\n      uint64(block.timestamp),\r\n      msg.sender\r\n    );\r\n  }\r\n\r\n  function commitWithBatchCode(\r\n    bytes32 merkleRoot, \r\n    uint256 fromEventId, \r\n    uint256 toEventId, \r\n    string calldata batchCode\r\n  ) external whenNotPaused onlyCommitter returns (uint256 batchId) {\r\n    batchId = commitMerkleRoot(merkleRoot, fromEventId, toEventId);\r\n    _bindBatchCode(batchId, batchCode);\r\n  }\r\n\r\n  function bindBatchCode(uint256 batchId, string calldata batchCode) external whenNotPaused onlyCommitter {\r\n    if (!batches[batchId].exists) revert BatchNotFound();\r\n    _bindBatchCode(batchId, batchCode);\r\n  }\r\n\r\n  function _bindBatchCode(uint256 batchId, string calldata batchCode) internal {\r\n    bytes32 h = keccak256(bytes(batchCode));\r\n    _batchCodeToBatchIds[h].push(batchId);\r\n    emit BatchCodeBound(h, batchId, batchCode);\r\n  }\r\n\r\n  function isEventIncluded(\r\n    bytes32 leaf,\r\n    uint256 batchId,\r\n    bytes32[] calldata proof\r\n  ) external view returns (bool) {\r\n    MerkleBatch memory mb = batches[batchId];\r\n    if (!mb.exists) return false;\r\n    bytes32 computed = _computeRootFromProof(leaf, proof);\r\n    return (computed == mb.root);\r\n  }\r\n\r\n  function verifyWithRoot(bytes32 leaf, bytes32 root, bytes32[] calldata proof) external pure returns (bool) {\r\n    return _computeRootFromProof(leaf, proof) == root;\r\n  }\r\n\r\n  function getBatch(uint256 batchId) external view returns (MerkleBatch memory) {\r\n    if (!batches[batchId].exists) revert BatchNotFound();\r\n    return batches[batchId];\r\n  }\r\n\r\n  function getBatchIdsByBatchCode(string calldata batchCode) external view returns (uint256[] memory) {\r\n    bytes32 h = keccak256(bytes(batchCode));\r\n    return _batchCodeToBatchIds[h];\r\n  }\r\n\r\n  function _computeRootFromProof(bytes32 leaf, bytes32[] calldata proof) internal pure returns (bytes32) {\r\n    bytes32 computed = leaf;\r\n    uint256 len = proof.length;\r\n\r\n    for (uint256 i = 0; i < len; ) {\r\n      bytes32 p = proof[i];\r\n      // sort pair then hash\r\n      if (computed < p) {\r\n          computed = keccak256(abi.encodePacked(computed, p));\r\n      } else {\r\n          computed = keccak256(abi.encodePacked(p, computed));\r\n      }\r\n      unchecked { ++i; }\r\n    }\r\n    return computed;\r\n  }\r\n}\r\n"
+      }
+    }
+  }
+}

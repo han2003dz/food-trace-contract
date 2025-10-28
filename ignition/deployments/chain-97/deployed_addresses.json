@@ -3,5 +3,6 @@
   "OrganizationRegistryModule#OrganizationRegistry": "0x002938CE9D470273ea8D9E14E6aBbA6928F804A9",
   "BatchRegistryModule#BatchRegistry": "0xf7bb6869f9eA7c2C54EDFa70fC89538A2d2aeA65",
   "CertRegistryModule#CertRegistry": "0x6AC2192dA4b1657591f2A7cB3aFD2eCb868c997a",
-  "TelemetryAnchorModule#TelemetryAnchor": "0xEAF1E45A9E2a3Fceef5a3713bD9aDEe4EB3Db66A"
+  "TelemetryAnchorModule#TelemetryAnchor": "0xEAF1E45A9E2a3Fceef5a3713bD9aDEe4EB3Db66A",
+  "TraceabilityModule#TraceabilityMerkleRegistry": "0xE2ef1Ef3C239034cFDaE6160074CF1321cC20e21"
 }

@@ -41,9 +41,13 @@ const config: HardhatUserConfig = {
       type: "http",
       chainType: "l1",
       url: process.env.BSC_RPC_URL || "https://bsc-testnet.publicnode.com",
-      accounts: process.env.BSC_PRIVATE_KEY
-        ? [process.env.BSC_PRIVATE_KEY]
-        : [],
+      accounts: process.env.PRIVATE_KEY ? [process.env.PRIVATE_KEY] : [],
+    },
+    baseSepolia: {
+      type: "http",
+      chainType: "l1",
+      url: process.env.BASE_SEPOLIA_RPC_URL || "",
+      accounts: process.env.PRIVATE_KEY ? [process.env.PRIVATE_KEY] : [],
     },
   },
 };
