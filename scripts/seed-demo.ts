@@ -1,112 +1,75 @@
 import { network } from "hardhat";
-
+const { ethers } = await network.connect();
 import * as dotenv from "dotenv";
-
 dotenv.config();
 
 async function main() {
-  const { ethers } = await network.connect({
-    network: "hardhatOp",
-    chainType: "op",
-  });
-  const [deployer] = await ethers.getSigners();
-  console.log(`👷 Deployer: ${deployer.address}`);
+  const CONTRACT_ADDRESS = "0x9907944Fcd4a7CD538feBB3a70367F5828506C3d";
+  const PRIVATE_KEY = process.env.PRIVATE_KEY || "";
+  const RPC_URL = process.env.BASE_SEPOLIA_RPC_URL || "";
 
-  // ======= ĐỊA CHỈ CONTRACT TRÊN BSC TESTNET =======
-  const addressBookAddr = "0x5b61AfA3ab03c834D57026BF386FD73c1F30a809";
-  const orgsAddr = "0x002938CE9D470273ea8D9E14E6aBbA6928F804A9";
-  const batchesAddr = "0xf7bb6869f9eA7c2C54EDFa70fC89538A2d2aeA65";
-  const certsAddr = "0x6AC2192dA4b1657591f2A7cB3aFD2eCb868c997a";
-  const telemetryAddr = "0xEAF1E45A9E2a3Fceef5a3713bD9aDEe4EB3Db66A";
+  const provider = new ethers.JsonRpcProvider(RPC_URL);
+  const wallet = new ethers.Wallet(PRIVATE_KEY, provider);
 
-  // ======= KẾT NỐI CONTRACT =======
-  const orgs = await ethers.getContractAt("OrganizationRegistry", orgsAddr);
-  const batches = await ethers.getContractAt("BatchRegistry", batchesAddr);
-  const certs = await ethers.getContractAt("CertRegistry", certsAddr);
-  const telemetry = await ethers.getContractAt(
-    "TelemetryAnchor",
-    telemetryAddr
+  const abi = await import(
+    "../artifacts/contracts/TraceabilityMerkleRegistry.sol/TraceabilityMerkleRegistry.json"
+  );
+  const registry = new ethers.Contract(
+    CONTRACT_ADDRESS,
+    abi.default.abi,
+    wallet
   );
 
-  console.log("orgs", orgs);
+  console.log("Connected as:", wallet.address);
 
-  console.log("✅ Connected to all contracts!");
-
-  // ======= 1️⃣ SEED 5 ORGANIZATIONS =======
-  const organizations = [
-    { name: "FreshFarm", role: "Farmer", location: "Cần Thơ" },
-    { name: "VietProcessing Co.", role: "Processor", location: "Đồng Nai" },
-    { name: "GreenDistributors", role: "Distributor", location: "TP. HCM" },
-    { name: "EcoRetail", role: "Retailer", location: "Hà Nội" },
-    { name: "SafeFoodAudit", role: "Auditor", location: "Huế" },
+  const sampleBatches = [
+    {
+      merkleRoot: ethers.keccak256(ethers.toUtf8Bytes("BATCH_001")),
+      fromEventId: 1,
+      toEventId: 10,
+      batchCode: "LOT-RAU-DA-LAT-2025-001",
+    },
+    {
+      merkleRoot: ethers.keccak256(ethers.toUtf8Bytes("BATCH_002")),
+      fromEventId: 11,
+      toEventId: 25,
+      batchCode: "LOT-TRA-THAI-NGUYEN-2025-002",
+    },
+    {
+      merkleRoot: ethers.keccak256(ethers.toUtf8Bytes("BATCH_003")),
+      fromEventId: 26,
+      toEventId: 40,
+      batchCode: "LOT-CA-PHE-BUON-MA-THUOT-2025-003",
+    },
   ];
 
-  console.log("🌱 Seeding Organizations...");
-  for (const org of organizations) {
-    console.log("orgs", org);
-    const tx = await orgs.registerOrganization(
-      org.name,
-      org.role,
-      org.location
+  for (const b of sampleBatches) {
+    console.log(`\n⏳ Committing batch code: ${b.batchCode}`);
+    const tx = await registry.commitWithBatchCode(
+      b.merkleRoot,
+      b.fromEventId,
+      b.toEventId,
+      b.batchCode
     );
     await tx.wait();
-    console.log(`   → ${org.name} (${org.role}) created`);
+    console.log(`✅ Batch ${b.batchCode} committed. TX: ${tx.hash}`);
   }
 
-  // ======= 2️⃣ SEED BATCHES =======
-  console.log("📦 Seeding Product Batches...");
-  const tx1 = await batches.createBatch(
-    "Organic Mango",
-    "Batch-001",
-    "2025-10-01",
-    "2025-10-10",
-    "Cần Thơ"
-  );
-  await tx1.wait();
+  const total = await registry.totalBatches();
+  console.log(`\n📦 Total batches now: ${total}`);
 
-  const tx2 = await batches.createBatch(
-    "Green Tea",
-    "Batch-002",
-    "2025-09-01",
-    "2025-09-15",
-    "Lâm Đồng"
-  );
-  await tx2.wait();
-
-  console.log("   → 2 product batches created");
-
-  // ======= 3️⃣ SEED CERTIFICATE =======
-  console.log("📜 Seeding Certificate...");
-  const certTx = await certs.issueCertificate(
-    "ISO22000",
-    "International Food Safety",
-    "SafeFoodAudit",
-    "2025-12-31"
-  );
-  await certTx.wait();
-  console.log("   → Certificate ISO22000 issued");
-
-  // ======= 4️⃣ SEED TELEMETRY DATA =======
-  console.log("📡 Seeding Telemetry Data...");
-  const telemetryTx = await telemetry.recordTelemetry(
-    "Batch-001",
-    23.5, // temperature °C
-    68, // humidity %
-    "10.762622,106.660172" // location (HCM)
-  );
-  await telemetryTx.wait();
-  console.log("   → Telemetry record saved for Batch-001");
-
-  console.log("\n🎉 SEED DEMO COMPLETED SUCCESSFULLY!");
-  console.log("===================================");
-  console.log("OrganizationRegistry:", orgsAddr);
-  console.log("BatchRegistry:", batchesAddr);
-  console.log("CertRegistry:", certsAddr);
-  console.log("TelemetryAnchor:", telemetryAddr);
-  console.log("AddressBook:", addressBookAddr);
+  const lastBatch = await registry.getBatch(total);
+  console.log(`\n🧾 Last batch detail:`);
+  console.log({
+    root: lastBatch.root,
+    from: lastBatch.fromEventId,
+    to: lastBatch.toEventId,
+    committer: lastBatch.committer,
+    timestamp: new Date(Number(lastBatch.timestamp) * 1000).toISOString(),
+  });
 }
 
-main().catch((e) => {
-  console.error("❌ Seed failed:", e);
+main().catch((err) => {
+  console.error("❌ Error seeding data:", err);
   process.exit(1);
 });
