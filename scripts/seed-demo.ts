@@ -24,22 +24,22 @@ async function main() {
 
   const sampleBatches = [
     {
-      merkleRoot: ethers.keccak256(ethers.toUtf8Bytes("BATCH_001")),
+      merkleRoot: ethers.keccak256(ethers.toUtf8Bytes("BATCH_004")),
       fromEventId: 1,
       toEventId: 10,
-      batchCode: "LOT-RAU-DA-LAT-2025-001",
+      batchCode: "LOT-RAU-DA-LAT-2025-002",
     },
     {
-      merkleRoot: ethers.keccak256(ethers.toUtf8Bytes("BATCH_002")),
+      merkleRoot: ethers.keccak256(ethers.toUtf8Bytes("BATCH_005")),
       fromEventId: 11,
       toEventId: 25,
-      batchCode: "LOT-TRA-THAI-NGUYEN-2025-002",
+      batchCode: "LOT-TRA-THAI-NGUYEN-2025-001",
     },
     {
-      merkleRoot: ethers.keccak256(ethers.toUtf8Bytes("BATCH_003")),
+      merkleRoot: ethers.keccak256(ethers.toUtf8Bytes("BATCH_006")),
       fromEventId: 26,
       toEventId: 40,
-      batchCode: "LOT-CA-PHE-BUON-MA-THUOT-2025-003",
+      batchCode: "LOT-CA-PHE-BUON-MA-THUOT-2025-004",
     },
   ];
 

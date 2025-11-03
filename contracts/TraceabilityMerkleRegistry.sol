@@ -36,9 +36,12 @@ contract TraceabilityMerkleRegistry {
     uint256 indexed batchId,
     string batchCode
   );
+  event CommitterAdded(address indexed account);
+  event CommitterRemoved(address indexed account);
 
   address public owner;
   address public committer;
+  mapping(address => bool) public allowedCommitters;
   bool public paused;
 
   modifier onlyOwner() {
@@ -46,7 +49,11 @@ contract TraceabilityMerkleRegistry {
     _;
   }
   modifier onlyCommitter() {
-    if (msg.sender != committer) revert Unauthorized();
+    if (
+      msg.sender != owner &&
+      msg.sender != committer &&
+      !allowedCommitters[msg.sender]
+    ) revert Unauthorized();
     _;
   }
   modifier whenNotPaused() {
@@ -73,8 +80,11 @@ contract TraceabilityMerkleRegistry {
     owner = msg.sender;
     address c = (initialCommitter == address(0) ? msg.sender : initialCommitter);
     committer = c;
+    allowedCommitters[c] = true;
+
     emit OwnershipTransferred(address(0), owner);
     emit CommitterChanged(address(0), committer);
+    emit CommitterAdded(c);
   }
 
   function transferOwnership(address newOwner) external onlyOwner {
@@ -87,6 +97,26 @@ contract TraceabilityMerkleRegistry {
     if (newCommitter == address(0)) revert ZeroAddress();
     emit CommitterChanged(committer, newCommitter);
     committer = newCommitter; 
+
+    if (!allowedCommitters[newCommitter]) {
+      allowedCommitters[newCommitter] = true;
+      emit CommitterAdded(newCommitter);
+    }
+  }
+
+  function addCommitter(address account) external onlyOwner {
+    if(account == address(0)) revert ZeroAddress();
+    if (!allowedCommitters[account]) {
+      allowedCommitters[account] = true;
+      emit CommitterAdded(account);
+    }
+  }
+
+  function removeCommitter(address account) external onlyOwner {
+    if (allowedCommitters[account]) {
+      allowedCommitters[account] = false;
+      emit CommitterRemoved(account);
+    }
   }
 
   function pause() external onlyOwner {
@@ -192,5 +222,9 @@ contract TraceabilityMerkleRegistry {
       unchecked { ++i; }
     }
     return computed;
+  }
+
+  function isAuthorizedCommitter(address account) external view returns (bool) {
+    return account == owner || account == committer || allowedCommitters[account];
   }
 }
