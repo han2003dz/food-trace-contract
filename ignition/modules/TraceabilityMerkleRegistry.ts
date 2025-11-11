@@ -2,22 +2,20 @@ import { buildModule } from "@nomicfoundation/hardhat-ignition/modules";
 import * as dotenv from "dotenv";
 dotenv.config();
 
-const TraceabilityModule = buildModule("TraceabilityModule", (m) => {
-  const committerFromEnv =
-    process.env.COMMITTER_ADDRESS ||
-    "0x0000000000000000000000000000000000000000";
-
-  const initialCommitter = m.getParameter("initialCommitter", committerFromEnv);
-
-  const registry = m.contract("TraceabilityMerkleRegistry", [initialCommitter]);
+/**
+ * TraceabilityModule
+ * Deploy contract TraceabilityRegistry (new version)
+ */
+const TraceabilityModule = buildModule("TraceabilityRegistryModule", (m) => {
+  const registry = m.contract("TraceabilityMerkleRegistry", []);
 
   m.call(registry, "owner", [], {
-    id: "owner_check",
+    id: "check_owner",
     after: [registry],
   });
 
-  m.call(registry, "committer", [], {
-    id: "committer_check",
+  m.call(registry, "paused", [], {
+    id: "check_paused",
     after: [registry],
   });
 

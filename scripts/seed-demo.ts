@@ -4,13 +4,18 @@ import * as dotenv from "dotenv";
 dotenv.config();
 
 async function main() {
-  const CONTRACT_ADDRESS = "0x9907944Fcd4a7CD538feBB3a70367F5828506C3d";
+  const CONTRACT_ADDRESS = "0xab17fEcAba71cce55253D8dBD03709209c5809E7";
   const PRIVATE_KEY = process.env.PRIVATE_KEY || "";
   const RPC_URL = process.env.BASE_SEPOLIA_RPC_URL || "";
+
+  if (!PRIVATE_KEY || !RPC_URL) {
+    throw new Error("⚠️ Missing PRIVATE_KEY or BASE_SEPOLIA_RPC_URL in .env");
+  }
 
   const provider = new ethers.JsonRpcProvider(RPC_URL);
   const wallet = new ethers.Wallet(PRIVATE_KEY, provider);
 
+  // ✅ Load ABI đúng contract mới
   const abi = await import(
     "../artifacts/contracts/TraceabilityMerkleRegistry.sol/TraceabilityMerkleRegistry.json"
   );
@@ -20,53 +25,121 @@ async function main() {
     wallet
   );
 
-  console.log("Connected as:", wallet.address);
+  console.log(`✅ Connected as ${wallet.address}`);
 
-  const sampleBatches = [
+  // ======= ROLE CONSTANTS =======
+  const ROLE_PRODUCER = 1 << 0;
+  const ROLE_AUDITOR = 1 << 4;
+
+  // ======= STEP 1: Assign roles =======
+  console.log("\n⚙️ Setting roles...");
+  const rolesTx = await registry.setRoles(
+    wallet.address,
+    ROLE_PRODUCER | ROLE_AUDITOR
+  );
+  await rolesTx.wait();
+  console.log("✅ Roles assigned (PRODUCER + AUDITOR)");
+
+  // ======= STEP 2: Create products =======
+  console.log("\n🌿 Creating demo products...");
+  const products = [
+    { name: "Rau Đà Lạt Hữu Cơ", metadataURI: "ipfs://QmRauDaLat" },
+    { name: "Trà Thái Nguyên Xanh", metadataURI: "ipfs://QmTraThaiNguyen" },
+    { name: "Cà Phê Buôn Ma Thuột", metadataURI: "ipfs://QmCaPheBMT" },
+  ];
+
+  for (const p of products) {
+    const tx = await registry.createProduct(p.name, p.metadataURI);
+    await tx.wait();
+    console.log(`✅ Product created: ${p.name}`);
+  }
+
+  // ======= STEP 3: Create batches =======
+  console.log("\n📦 Creating batches...");
+  const batches = [
     {
-      merkleRoot: ethers.keccak256(ethers.toUtf8Bytes("BATCH_004")),
-      fromEventId: 1,
-      toEventId: 10,
+      productId: 1,
       batchCode: "LOT-RAU-DA-LAT-2025-002",
+      hash: ethers.keccak256(ethers.toUtf8Bytes("batch-raudalat-2025")),
     },
     {
-      merkleRoot: ethers.keccak256(ethers.toUtf8Bytes("BATCH_005")),
-      fromEventId: 11,
-      toEventId: 25,
+      productId: 2,
       batchCode: "LOT-TRA-THAI-NGUYEN-2025-001",
+      hash: ethers.keccak256(ethers.toUtf8Bytes("batch-trathai-2025")),
     },
     {
-      merkleRoot: ethers.keccak256(ethers.toUtf8Bytes("BATCH_006")),
-      fromEventId: 26,
-      toEventId: 40,
-      batchCode: "LOT-CA-PHE-BUON-MA-THUOT-2025-004",
+      productId: 3,
+      batchCode: "LOT-CA-PHE-BMT-2025-004",
+      hash: ethers.keccak256(ethers.toUtf8Bytes("batch-caphe-2025")),
     },
   ];
 
-  for (const b of sampleBatches) {
-    console.log(`\n⏳ Committing batch code: ${b.batchCode}`);
-    const tx = await registry.commitWithBatchCode(
-      b.merkleRoot,
-      b.fromEventId,
-      b.toEventId,
-      b.batchCode
+  for (const b of batches) {
+    console.log(`\n⏳ Creating batch for ${b.batchCode}...`);
+    const tx = await registry.createBatch(b.productId, b.hash);
+    const receipt = await tx.wait();
+
+    // 🔹 Lấy batchId chính xác từ event
+    const createdEvent = receipt.logs.find(
+      (log: any) => log.fragment && log.fragment.name === "BatchCreated"
     );
-    await tx.wait();
-    console.log(`✅ Batch ${b.batchCode} committed. TX: ${tx.hash}`);
+    const batchId = createdEvent?.args?.batchId ?? createdEvent?.args?.[0];
+    console.log(`✅ Batch created for ${b.batchCode} (ID: ${batchId})`);
+
+    // 🔹 Kiểm tra batch code trùng
+    const codeHash = ethers.keccak256(ethers.toUtf8Bytes(b.batchCode));
+    const existing = await registry.batchCodeHashToBatchId(codeHash);
+    if (existing != 0n) {
+      console.log(
+        `⚠️ Batch code already exists (${b.batchCode}), skipping bind`
+      );
+      continue;
+    }
+
+    // 🔹 Bind batch code
+
+    const batch = await registry.batches(batchId);
+    console.log({
+      caller: wallet.address,
+      owner: await registry.owner(),
+      creator: batch.creator,
+      currentOwner: batch.currentOwner,
+    });
+
+    const txBind = await registry.bindBatchCode(batchId, b.batchCode);
+    await txBind.wait();
+    console.log(`🔗 Bound batchCode: ${b.batchCode}`);
   }
 
-  const total = await registry.totalBatches();
-  console.log(`\n📦 Total batches now: ${total}`);
+  // ======= STEP 4: Record events for first batch =======
+  console.log("\n🧾 Recording trace events...");
+  const EventType = {
+    Created: 0,
+    Processed: 1,
+    Shipped: 2,
+    Received: 3,
+    Stored: 4,
+    Sold: 5,
+    Recalled: 6,
+  };
 
-  const lastBatch = await registry.getBatch(total);
-  console.log(`\n🧾 Last batch detail:`);
-  console.log({
-    root: lastBatch.root,
-    from: lastBatch.fromEventId,
-    to: lastBatch.toEventId,
-    committer: lastBatch.committer,
-    timestamp: new Date(Number(lastBatch.timestamp) * 1000).toISOString(),
-  });
+  const eventHash = ethers.keccak256(ethers.toUtf8Bytes("process-event-demo"));
+  const txEvent = await registry.recordTraceEvent(
+    1,
+    EventType.Processed,
+    eventHash
+  );
+  await txEvent.wait();
+  console.log("✅ Added Processed event to batch 1");
+
+  // ======= STEP 5: Commit Merkle root for audit =======
+  console.log("\n🔐 Committing Merkle root for batch 1...");
+  const root = ethers.keccak256(ethers.toUtf8Bytes("MERKLE_ROOT_BATCH_1"));
+  const txRoot = await registry.commitBatchMerkleRoot(1, root);
+  await txRoot.wait();
+  console.log("✅ Merkle root committed:", root);
+
+  console.log("\n🎉 Demo seeding completed successfully!");
 }
 
 main().catch((err) => {

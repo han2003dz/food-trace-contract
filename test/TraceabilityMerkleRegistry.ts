@@ -3,121 +3,156 @@ import { network } from "hardhat";
 const { ethers } = await network.connect();
 
 describe("TraceabilityMerkleRegistry", function () {
-  let deployer: any;
-  let committer: any;
-  let other: any;
+  let owner: any;
+  let producer: any;
+  let processor: any;
+  let retailer: any;
+  let auditor: any;
   let contract: any;
 
-  beforeEach("Deploy contract before each test", async function () {
-    [deployer, committer, other] = await ethers.getSigners();
+  beforeEach("Deployment", async function () {
+    [owner, producer, processor, retailer, auditor] = await ethers.getSigners();
 
     const Factory = await ethers.getContractFactory(
       "TraceabilityMerkleRegistry"
     );
-    contract = await Factory.deploy(committer.address);
+    contract = await Factory.deploy();
     await contract.waitForDeployment();
+
+    // Gán roles cho các actor
+    const ROLE_PRODUCER = 1 << 0;
+    const ROLE_PROCESSOR = 1 << 1;
+    const ROLE_RETAILER = 1 << 3;
+    const ROLE_AUDITOR = 1 << 4;
+
+    await contract.setRoles(producer.address, ROLE_PRODUCER);
+    await contract.setRoles(processor.address, ROLE_PROCESSOR);
+    await contract.setRoles(retailer.address, ROLE_RETAILER);
+    await contract.setRoles(auditor.address, ROLE_AUDITOR);
   });
 
-  it("should set correct owner and committer at deployment", async function () {
-    expect(await contract.owner()).to.equal(deployer.address);
-    expect(await contract.committer()).to.equal(committer.address);
-    expect(await contract.allowedCommitters(committer.address)).to.equal(true);
+  it("should deploy with correct owner", async function () {
+    expect(await contract.owner()).to.equal(owner.address);
+    expect(await contract.paused()).to.equal(false);
   });
 
-  it("should allow owner to set new committer", async function () {
-    const newCommitter = other;
-    await contract.setCommitter(newCommitter.address);
-    expect(await contract.committer()).to.equal(newCommitter.address);
-    expect(await contract.allowedCommitters(newCommitter.address)).to.equal(
-      true
+  it("should allow owner to set roles", async function () {
+    const roles = await contract.roles(producer.address);
+    expect(roles).to.not.equal(0n);
+  });
+
+  it("should allow producer to create a product", async function () {
+    const tx = await contract
+      .connect(producer)
+      .createProduct("Coffee Beans Premium", "ipfs://Qm123456");
+    const receipt = await tx.wait();
+    const event = receipt.logs.find(
+      (l: any) => l.fragment.name === "ProductCreated"
     );
+
+    expect(event.args.name).to.equal("Coffee Beans Premium");
+    expect(await contract.nextProductId()).to.equal(2n);
   });
 
-  it("should revert if non-owner tries to set committer", async function () {
+  it("should not allow non-producer to create a product", async function () {
     await expect(
-      contract.connect(committer).setCommitter(other.address)
+      contract.connect(processor).createProduct("Milk", "ipfs://QmMilk")
     ).to.be.revertedWithCustomError(contract, "Unauthorized");
   });
 
-  it("should allow owner to add and remove allowed committers", async function () {
-    await contract.addCommitter(other.address);
-    expect(await contract.allowedCommitters(other.address)).to.equal(true);
-
-    await contract.removeCommitter(other.address);
-    expect(await contract.allowedCommitters(other.address)).to.equal(false);
-  });
-
-  it("should allow committer to commit a valid Merkle root", async function () {
-    const root = ethers.keccak256(ethers.toUtf8Bytes("root#1"));
-    await contract.connect(committer).commitMerkleRoot(root, 1, 10);
-
-    const total = await contract.totalBatches();
-    expect(total).to.equal(1n);
-
-    const batch = await contract.batches(1);
-    expect(batch.root).to.equal(root);
-    expect(batch.committer).to.equal(committer.address);
-  });
-
-  it("should revert when committing invalid range", async function () {
-    const root = ethers.keccak256(ethers.toUtf8Bytes("root#badrange"));
-    await expect(
-      contract.connect(committer).commitMerkleRoot(root, 10, 1)
-    ).to.be.revertedWithCustomError(contract, "InvalidRange");
-  });
-
-  it("should revert if same root committed twice", async function () {
-    const root = ethers.keccak256(ethers.toUtf8Bytes("root#dupe"));
-    await contract.connect(committer).commitMerkleRoot(root, 1, 5);
-    await expect(
-      contract.connect(committer).commitMerkleRoot(root, 6, 10)
-    ).to.be.revertedWithCustomError(contract, "RootAlreadyCommitted");
-  });
-
-  it("should pause and unpause only by owner", async function () {
-    await contract.pause();
-    expect(await contract.paused()).to.equal(true);
-
-    await contract.unpause();
-    expect(await contract.paused()).to.equal(false);
-
-    await expect(contract.connect(other).pause()).to.be.revertedWithCustomError(
-      contract,
-      "Unauthorized"
+  it("should allow producer to create batch for existing product", async function () {
+    await contract.connect(producer).createProduct("Coffee", "ipfs://meta");
+    const hash = ethers.keccak256(ethers.toUtf8Bytes("batch-meta"));
+    const tx = await contract.connect(producer).createBatch(1, hash);
+    const receipt = await tx.wait();
+    const event = receipt.logs.find(
+      (l: any) => l.fragment.name === "BatchCreated"
     );
+    expect(event.args.productId).to.equal(1n);
+    expect(await contract.nextBatchId()).to.equal(2n);
   });
 
-  it("should allow commit with batchCode", async function () {
-    const root = ethers.keccak256(ethers.toUtf8Bytes("root#batch"));
-    const batchCode = "LOT-COFFEE-BMT-2025-001";
+  it("should revert createBatch if product not exist", async function () {
+    const hash = ethers.keccak256(ethers.toUtf8Bytes("invalid-batch"));
+    await expect(
+      contract.connect(producer).createBatch(999, hash)
+    ).to.be.revertedWithCustomError(contract, "InvalidProduct");
+  });
 
-    const tx = await contract
-      .connect(committer)
-      .commitWithBatchCode(root, 1, 3, batchCode);
+  it("should allow owner or current owner to bind batchCode", async function () {
+    await contract.connect(producer).createProduct("Tea", "ipfs://meta");
+    const hash = ethers.keccak256(ethers.toUtf8Bytes("data"));
+    await contract.connect(producer).createBatch(1, hash);
 
+    const batchCode = "BATCH-TEA-001";
+    const tx = await contract.connect(producer).bindBatchCode(1, batchCode);
     await expect(tx)
       .to.emit(contract, "BatchCodeBound")
-      .withArgs(ethers.keccak256(ethers.toUtf8Bytes(batchCode)), 1n, batchCode);
-
-    const ids = await contract.getBatchIdsByBatchCode(batchCode);
-    expect(ids.length).to.equal(1);
-    expect(ids[0]).to.equal(1n);
+      .withArgs(1n, ethers.keccak256(ethers.toUtf8Bytes(batchCode)), batchCode);
   });
 
-  it("should revert bindBatchCode if batch does not exist", async function () {
+  it("should revert when binding duplicate batchCode", async function () {
+    await contract.connect(producer).createProduct("Tea", "ipfs://meta");
+    const hash = ethers.keccak256(ethers.toUtf8Bytes("data"));
+    await contract.connect(producer).createBatch(1, hash);
+    const batchCode = "BATCH-TEA-001";
+    await contract.connect(producer).bindBatchCode(1, batchCode);
+
     await expect(
-      contract.connect(committer).bindBatchCode(999, "LOT-NOPE-001")
-    ).to.be.revertedWithCustomError(contract, "BatchNotFound");
+      contract.connect(owner).bindBatchCode(1, batchCode)
+    ).to.be.revertedWithCustomError(contract, "BatchCodeAlreadyUsed");
   });
 
-  // it("should revert if batchCode is empty", async function () {
-  //   const root = ethers.keccak256(ethers.toUtf8Bytes("root#empty"));
-  //   await contract.connect(committer).commitMerkleRoot(root, 1, 5);
+  it("should record valid trace event (Processed by Processor)", async function () {
+    await contract.connect(producer).createProduct("Coffee", "ipfs://meta");
+    const hash = ethers.keccak256(ethers.toUtf8Bytes("batch1"));
+    await contract.connect(producer).createBatch(1, hash);
 
-  //   await expect(
-  //     contract.connect(committer).bindBatchCode(1, "")
-  //   ).to.be.revertedWithCustomError(contract, "EmptyBatchCode");
-  // });
+    const dataHash = ethers.keccak256(ethers.toUtf8Bytes("processed#001"));
+    const tx = await contract
+      .connect(processor)
+      .recordTraceEvent(1, 1, dataHash); // EventType.Processed = 1 trong enum
+    await tx.wait();
+
+    const events = await contract.getBatchEvents(1);
+    expect(events.length).to.equal(2); // Created + Processed
+  });
+
+  it("should revert trace event if unauthorized role", async function () {
+    await contract.connect(producer).createProduct("Coffee", "ipfs://meta");
+    const hash = ethers.keccak256(ethers.toUtf8Bytes("batch1"));
+    await contract.connect(producer).createBatch(1, hash);
+
+    const dataHash = ethers.keccak256(ethers.toUtf8Bytes("ship"));
+    await expect(
+      contract.connect(retailer).recordTraceEvent(1, 2, dataHash)
+    ).to.be.revertedWithCustomError(contract, "Unauthorized");
+  });
+
+  it("should allow auditor to commit Merkle root", async function () {
+    await contract.connect(producer).createProduct("Coffee", "ipfs://meta");
+    const hash = ethers.keccak256(ethers.toUtf8Bytes("batch1"));
+    await contract.connect(producer).createBatch(1, hash);
+
+    const root = ethers.keccak256(ethers.toUtf8Bytes("merkle#001"));
+    const tx = await contract.connect(auditor).commitBatchMerkleRoot(1, root);
+    await tx.wait();
+
+    const stored = await contract.batchMerkleRoot(1);
+    expect(stored).to.equal(root);
+  });
+
+  it("should revert when committing duplicate Merkle root", async function () {
+    await contract.connect(producer).createProduct("Coffee", "ipfs://meta");
+    const hash = ethers.keccak256(ethers.toUtf8Bytes("batch1"));
+    await contract.connect(producer).createBatch(1, hash);
+
+    const root = ethers.keccak256(ethers.toUtf8Bytes("merkle#dup"));
+    await contract.connect(auditor).commitBatchMerkleRoot(1, root);
+    await expect(
+      contract.connect(auditor).commitBatchMerkleRoot(1, root)
+    ).to.be.revertedWithCustomError(contract, "MerkleRootAlreadySet");
+  });
 
   it("should pause and unpause only by owner", async function () {
     await contract.pause();
@@ -126,18 +161,15 @@ describe("TraceabilityMerkleRegistry", function () {
     await contract.unpause();
     expect(await contract.paused()).to.equal(false);
 
-    await expect(contract.connect(other).pause()).to.be.revertedWithCustomError(
-      contract,
-      "Unauthorized"
-    );
+    await expect(
+      contract.connect(producer).pause()
+    ).to.be.revertedWithCustomError(contract, "Unauthorized");
   });
 
-  it("should prevent commit when paused", async function () {
+  it("should prevent actions when paused", async function () {
     await contract.pause();
-
-    const root = ethers.keccak256(ethers.toUtf8Bytes("root#paused"));
     await expect(
-      contract.connect(committer).commitMerkleRoot(root, 1, 2)
-    ).to.be.revertedWithCustomError(contract, "Unauthorized");
+      contract.connect(producer).createProduct("Coffee", "ipfs://meta")
+    ).to.be.revertedWithCustomError(contract, "PausedContract");
   });
 });
