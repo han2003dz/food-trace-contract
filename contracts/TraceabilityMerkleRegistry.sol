@@ -300,11 +300,6 @@ contract TraceabilityMerkleRegistry {
             if (r == 0) revert Unauthorized();
         }
     }
-
-    // ========= MERKLE ROOT (OPTIONAL, CHO DATA OFF-CHAIN) =========
-
-    /// @notice Auditor (hoặc Owner) commit Merkle root chứa full log off-chain của batch.
-    ///         Dùng để chứng minh dữ liệu off-chain không bị sửa.
     function commitBatchMerkleRoot(
         uint256 batchId,
         bytes32 merkleRoot
