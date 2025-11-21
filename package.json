@@ -21,6 +21,7 @@
   },
   "scripts": {
     "deploy:testnet": "npx hardhat ignition deploy --network baseSepolia ignition/modules/TraceabilityMerkleRegistry.ts",
-    "seed": "npx hardhat run scripts/seed-demo.ts --network baseSepolia"
+    "seed": "npx hardhat run scripts/seed-demo.ts --network baseSepolia",
+    "test": "npx hardhat test"
   }
 }

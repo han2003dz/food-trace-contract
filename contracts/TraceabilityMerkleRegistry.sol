@@ -221,29 +221,33 @@ contract TraceabilityMerkleRegistry {
     /// @param eventType loại sự kiện
     /// @param dataHash hash metadata off-chain (chi tiết sự kiện)
     function recordTraceEvent(
-        uint256 batchId,
-        EventType eventType,
-        bytes32 dataHash
+      uint256 batchId,
+      EventType eventType,
+      bytes32 dataHash
     ) external whenNotPaused batchExists(batchId) {
-        Batch storage b = batches[batchId];
-        if (b.closed) revert BatchAlreadyClosed();
+      Batch storage b = batches[batchId];
+      if (b.closed) revert BatchAlreadyClosed();
 
-        // Kiểm tra quyền theo loại event
-        _requireAuthorizedForEvent(eventType, msg.sender);
+      // 1. Kiểm tra role theo loại event
+      _requireAuthorizedForEvent(eventType, msg.sender);
 
-        // Cập nhật owner trong một số case (logic demo, bạn có thể tinh chỉnh thêm)
-        if (eventType == EventType.Received || eventType == EventType.Stored) {
-            // người nhận / nơi lưu kho trở thành currentOwner
-            b.currentOwner = msg.sender;
-        }
-        if (eventType == EventType.Sold || eventType == EventType.Recalled) {
-            // kết thúc vòng đời batch
-            b.currentOwner = msg.sender;
-            b.closed = true;
-        }
+      // 2. Kiểm tra nghiệp vụ chuyển giao / quyền sở hữu
+      _requireValidFlow(batchId, eventType, msg.sender);
 
-        _recordEvent(batchId, eventType, msg.sender, dataHash);
+      // 3. Cập nhật owner trong một số case
+      if (eventType == EventType.Received || eventType == EventType.Stored) {
+          // người nhận / nơi lưu kho trở thành currentOwner
+          b.currentOwner = msg.sender;
+      }
+      if (eventType == EventType.Sold || eventType == EventType.Recalled) {
+          // kết thúc vòng đời batch
+          b.currentOwner = msg.sender;
+          b.closed = true;
+      }
+
+      _recordEvent(batchId, eventType, msg.sender, dataHash);
     }
+
 
     function _recordEvent(
         uint256 batchId,
@@ -277,29 +281,68 @@ contract TraceabilityMerkleRegistry {
         );
     }
 
-    function _requireAuthorizedForEvent(EventType eventType, address account) internal view {
-        uint256 r = roles[account];
-        if (account == owner) return;
-
-        if (eventType == EventType.Created) {
-            if ((r & ROLE_PRODUCER) == 0) revert Unauthorized();
-        } else if (eventType == EventType.Processed) {
-            if ((r & (ROLE_PRODUCER | ROLE_PROCESSOR)) == 0) revert Unauthorized();
-        } else if (eventType == EventType.Shipped) {
-            if ((r & (ROLE_PRODUCER | ROLE_PROCESSOR | ROLE_TRANSPORTER)) == 0) revert Unauthorized();
-        } else if (eventType == EventType.Received) {
-            if ((r & (ROLE_PROCESSOR | ROLE_RETAILER)) == 0) revert Unauthorized();
-        } else if (eventType == EventType.Stored) {
-            if ((r & (ROLE_RETAILER | ROLE_PROCESSOR)) == 0) revert Unauthorized();
-        } else if (eventType == EventType.Sold) {
-            if ((r & ROLE_RETAILER) == 0) revert Unauthorized();
-        } else if (eventType == EventType.Recalled) {
-            if ((r & (ROLE_PRODUCER | ROLE_RETAILER | ROLE_AUDITOR)) == 0) revert Unauthorized();
-        } else if (eventType == EventType.Custom) {
-            // Cho phép nhiều bên, tuỳ use-case; ở đây yêu cầu phải có ít nhất 1 role
-            if (r == 0) revert Unauthorized();
+    function _requireAuthorizedForEvent(
+      EventType eventType,
+      address account
+    ) internal view {
+      uint256 r = roles[account];
+      if (account == owner) return;
+      if (eventType == EventType.Created) {
+        if ((r & ROLE_PRODUCER) == 0) revert Unauthorized();
+      } else if (eventType == EventType.Processed) {
+        if ((r & (ROLE_PRODUCER | ROLE_PROCESSOR)) == 0) revert Unauthorized();
+      } else if (eventType == EventType.Shipped) {
+        if ((r & (ROLE_PRODUCER | ROLE_PROCESSOR | ROLE_TRANSPORTER)) == 0) {
+          revert Unauthorized();
         }
+      } else if (eventType == EventType.Received) {
+        if (
+          (r & (ROLE_TRANSPORTER | ROLE_PROCESSOR | ROLE_RETAILER)) == 0
+        ) {
+          revert Unauthorized();
+        }
+      } else if (eventType == EventType.Stored) {
+          if ((r & (ROLE_RETAILER | ROLE_PROCESSOR)) == 0) revert Unauthorized();
+      } else if (eventType == EventType.Sold) {
+          if ((r & ROLE_RETAILER) == 0) revert Unauthorized();
+      } else if (eventType == EventType.Recalled) {
+        if ((r & (ROLE_PRODUCER | ROLE_RETAILER | ROLE_AUDITOR)) == 0) {
+          revert Unauthorized();
+        }
+      } else if (eventType == EventType.Custom) {
+        if (r == 0) revert Unauthorized();
+      }
     }
+
+
+    function _requireValidFlow(
+      uint256 batchId,
+      EventType eventType,
+      address actor
+    ) internal view {
+      Batch storage b = batches[batchId];
+
+      if (eventType == EventType.Received) {
+          if (actor == b.currentOwner) {
+              revert Unauthorized();
+          }
+          return;
+      }
+
+      if (
+          eventType == EventType.Processed ||
+          eventType == EventType.Shipped  ||
+          eventType == EventType.Stored   ||
+          eventType == EventType.Sold     ||
+          eventType == EventType.Recalled ||
+          eventType == EventType.Custom
+      ) {
+          if (actor != b.currentOwner && actor != owner) {
+              revert Unauthorized();
+          }
+      }
+    }
+
     function commitBatchMerkleRoot(
         uint256 batchId,
         bytes32 merkleRoot

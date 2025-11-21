@@ -10,6 +10,11 @@ describe("TraceabilityMerkleRegistry", function () {
   let auditor: any;
   let contract: any;
 
+  const ROLE_PRODUCER = 1 << 0;
+  const ROLE_PROCESSOR = 1 << 1;
+  const ROLE_RETAILER = 1 << 3;
+  const ROLE_AUDITOR = 1 << 4;
+
   beforeEach("Deployment", async function () {
     [owner, producer, processor, retailer, auditor] = await ethers.getSigners();
 
@@ -20,10 +25,6 @@ describe("TraceabilityMerkleRegistry", function () {
     await contract.waitForDeployment();
 
     // Gán roles cho các actor
-    const ROLE_PRODUCER = 1 << 0;
-    const ROLE_PROCESSOR = 1 << 1;
-    const ROLE_RETAILER = 1 << 3;
-    const ROLE_AUDITOR = 1 << 4;
 
     await contract.setRoles(producer.address, ROLE_PRODUCER);
     await contract.setRoles(processor.address, ROLE_PROCESSOR);
@@ -37,8 +38,10 @@ describe("TraceabilityMerkleRegistry", function () {
   });
 
   it("should allow owner to set roles", async function () {
+    await contract.setRoles(producer.address, ROLE_PRODUCER);
+
     const roles = await contract.roles(producer.address);
-    expect(roles).to.not.equal(0n);
+    expect(roles).to.equal(ROLE_PRODUCER);
   });
 
   it("should allow producer to create a product", async function () {
@@ -103,19 +106,19 @@ describe("TraceabilityMerkleRegistry", function () {
     ).to.be.revertedWithCustomError(contract, "BatchCodeAlreadyUsed");
   });
 
-  it("should record valid trace event (Processed by Processor)", async function () {
+  it("should record valid Processed event", async function () {
     await contract.connect(producer).createProduct("Coffee", "ipfs://meta");
     const hash = ethers.keccak256(ethers.toUtf8Bytes("batch1"));
     await contract.connect(producer).createBatch(1, hash);
 
-    const dataHash = ethers.keccak256(ethers.toUtf8Bytes("processed#001"));
-    const tx = await contract
-      .connect(processor)
-      .recordTraceEvent(1, 1, dataHash); // EventType.Processed = 1 trong enum
-    await tx.wait();
+    const dataHash = ethers.keccak256(ethers.toUtf8Bytes("processed"));
 
-    const events = await contract.getBatchEvents(1);
-    expect(events.length).to.equal(2); // Created + Processed
+    await expect(
+      contract.connect(producer).recordTraceEvent(1, 1, dataHash)
+    ).to.emit(contract, "TraceEventRecorded");
+
+    const ev = await contract.getBatchEvents(1);
+    expect(ev.length).to.equal(2); // Created + Processed
   });
 
   it("should revert trace event if unauthorized role", async function () {
@@ -128,6 +131,18 @@ describe("TraceabilityMerkleRegistry", function () {
       contract.connect(retailer).recordTraceEvent(1, 2, dataHash)
     ).to.be.revertedWithCustomError(contract, "Unauthorized");
   });
+
+  it("Retailer cannot record Shipped event", async function () {
+    await contract.connect(producer).createProduct("Coffee", "ipfs://meta");
+    const hash = ethers.keccak256(ethers.toUtf8Bytes("batch1"));
+    await contract.connect(producer).createBatch(1, hash);
+    const dataHash = ethers.keccak256(ethers.toUtf8Bytes("ship"));
+    await expect(
+      contract.connect(retailer).recordTraceEvent(1, 2, dataHash)
+    ).to.be.revertedWithCustomError(contract, "Unauthorized");
+  });
+
+  //
 
   it("should allow auditor to commit Merkle root", async function () {
     await contract.connect(producer).createProduct("Coffee", "ipfs://meta");
