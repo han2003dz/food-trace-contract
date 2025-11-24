@@ -1,22 +1,38 @@
 import { expect } from "chai";
 import { network } from "hardhat";
+
 const { ethers } = await network.connect();
 
 describe("TraceabilityMerkleRegistry", function () {
   let owner: any;
   let producer: any;
   let processor: any;
+  let transporter: any;
   let retailer: any;
   let auditor: any;
   let contract: any;
 
   const ROLE_PRODUCER = 1 << 0;
   const ROLE_PROCESSOR = 1 << 1;
+  const ROLE_TRANSPORTER = 1 << 2;
   const ROLE_RETAILER = 1 << 3;
   const ROLE_AUDITOR = 1 << 4;
 
+  // Enum mapping (for readability)
+  const EventType = {
+    Created: 0,
+    Processed: 1,
+    Shipped: 2,
+    Received: 3,
+    Stored: 4,
+    Sold: 5,
+    Recalled: 6,
+    Custom: 7,
+  } as const;
+
   beforeEach("Deployment", async function () {
-    [owner, producer, processor, retailer, auditor] = await ethers.getSigners();
+    [owner, producer, processor, transporter, retailer, auditor] =
+      await ethers.getSigners();
 
     const Factory = await ethers.getContractFactory(
       "TraceabilityMerkleRegistry"
@@ -24,10 +40,10 @@ describe("TraceabilityMerkleRegistry", function () {
     contract = await Factory.deploy();
     await contract.waitForDeployment();
 
-    // Gán roles cho các actor
-
+    // Assign roles
     await contract.setRoles(producer.address, ROLE_PRODUCER);
     await contract.setRoles(processor.address, ROLE_PROCESSOR);
+    await contract.setRoles(transporter.address, ROLE_TRANSPORTER);
     await contract.setRoles(retailer.address, ROLE_RETAILER);
     await contract.setRoles(auditor.address, ROLE_AUDITOR);
   });
@@ -39,7 +55,6 @@ describe("TraceabilityMerkleRegistry", function () {
 
   it("should allow owner to set roles", async function () {
     await contract.setRoles(producer.address, ROLE_PRODUCER);
-
     const roles = await contract.roles(producer.address);
     expect(roles).to.equal(ROLE_PRODUCER);
   });
@@ -50,7 +65,7 @@ describe("TraceabilityMerkleRegistry", function () {
       .createProduct("Coffee Beans Premium", "ipfs://Qm123456");
     const receipt = await tx.wait();
     const event = receipt.logs.find(
-      (l: any) => l.fragment.name === "ProductCreated"
+      (l: any) => l.fragment?.name === "ProductCreated"
     );
 
     expect(event.args.name).to.equal("Coffee Beans Premium");
@@ -69,7 +84,7 @@ describe("TraceabilityMerkleRegistry", function () {
     const tx = await contract.connect(producer).createBatch(1, hash);
     const receipt = await tx.wait();
     const event = receipt.logs.find(
-      (l: any) => l.fragment.name === "BatchCreated"
+      (l: any) => l.fragment?.name === "BatchCreated"
     );
     expect(event.args.productId).to.equal(1n);
     expect(await contract.nextBatchId()).to.equal(2n);
@@ -106,7 +121,7 @@ describe("TraceabilityMerkleRegistry", function () {
     ).to.be.revertedWithCustomError(contract, "BatchCodeAlreadyUsed");
   });
 
-  it("should record valid Processed event", async function () {
+  it("should record valid Processed event (by producer)", async function () {
     await contract.connect(producer).createProduct("Coffee", "ipfs://meta");
     const hash = ethers.keccak256(ethers.toUtf8Bytes("batch1"));
     await contract.connect(producer).createBatch(1, hash);
@@ -114,7 +129,9 @@ describe("TraceabilityMerkleRegistry", function () {
     const dataHash = ethers.keccak256(ethers.toUtf8Bytes("processed"));
 
     await expect(
-      contract.connect(producer).recordTraceEvent(1, 1, dataHash)
+      contract
+        .connect(producer)
+        .recordTraceEvent(1, EventType.Processed, dataHash, ethers.ZeroAddress)
     ).to.emit(contract, "TraceEventRecorded");
 
     const ev = await contract.getBatchEvents(1);
@@ -128,7 +145,9 @@ describe("TraceabilityMerkleRegistry", function () {
 
     const dataHash = ethers.keccak256(ethers.toUtf8Bytes("ship"));
     await expect(
-      contract.connect(retailer).recordTraceEvent(1, 2, dataHash)
+      contract
+        .connect(retailer)
+        .recordTraceEvent(1, EventType.Shipped, dataHash, processor.address)
     ).to.be.revertedWithCustomError(contract, "Unauthorized");
   });
 
@@ -137,12 +156,111 @@ describe("TraceabilityMerkleRegistry", function () {
     const hash = ethers.keccak256(ethers.toUtf8Bytes("batch1"));
     await contract.connect(producer).createBatch(1, hash);
     const dataHash = ethers.keccak256(ethers.toUtf8Bytes("ship"));
+
     await expect(
-      contract.connect(retailer).recordTraceEvent(1, 2, dataHash)
+      contract
+        .connect(retailer)
+        .recordTraceEvent(1, EventType.Shipped, dataHash, processor.address)
     ).to.be.revertedWithCustomError(contract, "Unauthorized");
   });
 
-  //
+  // =========================
+  // TRANSFER / PENDING RECEIVER FLOW
+  // =========================
+
+  it("should allow producer to ship to transporter, and transporter to receive & become currentOwner", async function () {
+    await contract.connect(producer).createProduct("Coffee", "ipfs://meta");
+    const initHash = ethers.keccak256(ethers.toUtf8Bytes("batch1"));
+    await contract.connect(producer).createBatch(1, initHash);
+
+    // Producer ships to transporter
+    const shipHash = ethers.keccak256(ethers.toUtf8Bytes("ship#1"));
+    await expect(
+      contract
+        .connect(producer)
+        .recordTraceEvent(1, EventType.Shipped, shipHash, transporter.address)
+    ).to.emit(contract, "TraceEventRecorded");
+
+    // Check pendingReceiver set
+    const batchAfterShip = await contract.batches(1);
+    expect(batchAfterShip.pendingReceiver).to.equal(transporter.address);
+
+    // Transporter receives
+    const recvHash = ethers.keccak256(ethers.toUtf8Bytes("recv#1"));
+    await expect(
+      contract.connect(transporter).recordTraceEvent(
+        1,
+        EventType.Received,
+        recvHash,
+        ethers.ZeroAddress // ignored in Received
+      )
+    ).to.emit(contract, "TraceEventRecorded");
+
+    const batchAfterReceive = await contract.batches(1);
+    expect(batchAfterReceive.currentOwner).to.equal(transporter.address);
+    expect(batchAfterReceive.pendingReceiver).to.equal(ethers.ZeroAddress);
+    expect(batchAfterReceive.closed).to.equal(false);
+
+    const events = await contract.getBatchEvents(1);
+    // Created + Shipped + Received = 3
+    expect(events.length).to.equal(3);
+  });
+
+  it("should revert when shipping to self", async function () {
+    await contract.connect(producer).createProduct("Coffee", "ipfs://meta");
+    const initHash = ethers.keccak256(ethers.toUtf8Bytes("batch1"));
+    await contract.connect(producer).createBatch(1, initHash);
+
+    const shipHash = ethers.keccak256(ethers.toUtf8Bytes("invalid-self-ship"));
+
+    await expect(
+      contract.connect(producer).recordTraceEvent(
+        1,
+        EventType.Shipped,
+        shipHash,
+        producer.address // self
+      )
+    ).to.be.revertedWithCustomError(contract, "Unauthorized");
+  });
+
+  it("should revert when non-pending receiver tries to receive", async function () {
+    await contract.connect(producer).createProduct("Coffee", "ipfs://meta");
+    const initHash = ethers.keccak256(ethers.toUtf8Bytes("batch1"));
+    await contract.connect(producer).createBatch(1, initHash);
+
+    // Producer ships to transporter
+    const shipHash = ethers.keccak256(ethers.toUtf8Bytes("ship#1"));
+    await contract
+      .connect(producer)
+      .recordTraceEvent(1, EventType.Shipped, shipHash, transporter.address);
+
+    const recvHash = ethers.keccak256(ethers.toUtf8Bytes("recv#by-retailer"));
+
+    // Retailer tries to receive but is not pendingReceiver
+    await expect(
+      contract
+        .connect(retailer)
+        .recordTraceEvent(1, EventType.Received, recvHash, ethers.ZeroAddress)
+    ).to.be.revertedWithCustomError(contract, "Unauthorized");
+  });
+
+  it("should revert Received if no pendingReceiver exists", async function () {
+    await contract.connect(producer).createProduct("Coffee", "ipfs://meta");
+    const initHash = ethers.keccak256(ethers.toUtf8Bytes("batch1"));
+    await contract.connect(producer).createBatch(1, initHash);
+
+    const recvHash = ethers.keccak256(ethers.toUtf8Bytes("recv#no-pending"));
+
+    await expect(
+      contract
+        .connect(processor)
+        .recordTraceEvent(1, EventType.Received, recvHash, ethers.ZeroAddress)
+    ).to.be.revertedWithCustomError(contract, "Unauthorized");
+  });
+
+  // =========================
+  // MERKLE ROOT
+  // =========================
 
   it("should allow auditor to commit Merkle root", async function () {
     await contract.connect(producer).createProduct("Coffee", "ipfs://meta");
@@ -168,6 +286,10 @@ describe("TraceabilityMerkleRegistry", function () {
       contract.connect(auditor).commitBatchMerkleRoot(1, root)
     ).to.be.revertedWithCustomError(contract, "MerkleRootAlreadySet");
   });
+
+  // =========================
+  // PAUSE / UNPAUSE
+  // =========================
 
   it("should pause and unpause only by owner", async function () {
     await contract.pause();
